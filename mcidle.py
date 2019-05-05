@@ -125,6 +125,6 @@ class SLPHandler(MinecraftRequestHandler):
 		self.mc_send(packet.read(), pid = pid)
 
 if __name__ == '__main__':
-	target = 'localhost', 25565
+	target = '0.0.0.0', 25565
 	with socketserver.TCPServer(target, SLPHandler) as server:
 		server.serve_forever()

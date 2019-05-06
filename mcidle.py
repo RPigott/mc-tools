@@ -130,7 +130,7 @@ class SLPHandler(MinecraftRequestHandler):
 if __name__ == '__main__':
 	server_info = {
 		'version': {
-			'name': '1.14',
+			'name': 'latest',
 		},
 		'players': {
 			'max': 0,

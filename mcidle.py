@@ -1,6 +1,6 @@
-import socket, socketserver
-import struct, json, io, copy
 import argparse
+import socketserver, subprocess
+import struct, json, io, copy
 
 parser = argparse.ArgumentParser(
 	description = "Shell server for handling minecraft SLP requests",
@@ -19,6 +19,7 @@ class MinecraftServer(socketserver.TCPServer):
 	def __init__(self, server_info, *args, **kwds):
 		super().__init__(*args, **kwds)
 		self.server_info = server_info
+		self.job = None
 
 class MCFormatError(Exception):
 	"""Minecraft protocol format error"""
@@ -87,6 +88,7 @@ class MCString:
 		return MCString(rfile.read(size.value))
 
 class MinecraftRequestHandler(socketserver.StreamRequestHandler):
+
 	def mc_recv(self):
 		"""Return one minecraft protocol packet"""
 		try:
@@ -106,6 +108,7 @@ class MinecraftRequestHandler(socketserver.StreamRequestHandler):
 		self.wfile.write(data)
 
 class SLPHandler(MinecraftRequestHandler):
+
 	def handle(self):
 		# Read protocol things
 		packet, pid = self.mc_recv() # Hello
@@ -126,6 +129,14 @@ class SLPHandler(MinecraftRequestHandler):
 		# Client expects an echo
 		packet, pid = self.mc_recv()
 		self.mc_send(packet.read(), pid = pid)
+
+		# This was a valid conversation, start the aux job
+		retcode = self.server.job.poll() if self.server.job else 0
+		if retcode == 0:
+			cmd = "gcloud compute instances start mc-server-test".split()
+			self.server.job = subprocess.Popen(cmd)
+		job = self.server.job
+		print(f"Request from {self.client_address[0]}. Running aux job [{job.pid}]: {' '.join(job.args)}")
 
 if __name__ == '__main__':
 	server_info = {

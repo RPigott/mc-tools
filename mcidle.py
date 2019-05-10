@@ -1,12 +1,12 @@
 import socket, socketserver, subprocess
-import struct, json, io, copy
+import struct, json, io, shlex, copy
 import sys, traceback
 
 class MinecraftServer(socketserver.TCPServer):
-	def __init__(self, server_info, *args, **kwds):
+	def __init__(self, server_info, job = None, *args, **kwds):
 		super().__init__(*args, **kwds)
 		self.server_info = server_info
-		self.job = None
+		self.job = job
 
 	def mc_pack(payload, pid = 0):
 		pid = MCVarInt(pid)
@@ -106,6 +106,19 @@ class MinecraftRequestHandler(socketserver.StreamRequestHandler):
 
 class SLPHandler(MinecraftRequestHandler):
 
+	def do_run(self):
+		print(f"Request from {self.client_address[0]}.")
+		if hasattr(self.server, 'run'):
+			ret = self.server.run.poll()
+		else:
+			ret = 0
+		# Only run job if last job has exited succesfully
+		if ret == 0:
+			cmd = shlex.split(self.server.job)
+			proc = subprocess.Popen(cmd)
+			self.server.run = proc
+			print(f"Running aux job [{proc.pid}]: {' '.join(proc.args)}")
+
 	def handle(self):
 		# Read protocol things
 		packet, pid = self.mc_recv() # Hello
@@ -128,15 +141,11 @@ class SLPHandler(MinecraftRequestHandler):
 		self.mc_send(packet.read(), pid = pid)
 
 		# This was a valid conversation, start the aux job
-		retcode = self.server.job.poll() if self.server.job else 0
-		if retcode == 0:
-			cmd = "gcloud compute instances start mc-server-test".split()
-			self.server.job = subprocess.Popen(cmd)
-		job = self.server.job
-		print(f"Request from {self.client_address[0]}. Running aux job [{job.pid}]: {' '.join(job.args)}")
+		if self.server.job:
+			self.do_run()
 
-def serve(target, server_info):
-	with MinecraftServer(server_info, target, SLPHandler) as server:
+def serve(target, server_info, job):
+	with MinecraftServer(server_info, job, target, SLPHandler) as server:
 		server.serve_forever()
 
 def ping(target):
@@ -182,12 +191,10 @@ if __name__ == '__main__':
 		1 if there are players online
 	""",
 		action = 'store_true')
-	parser.add_argument('--serve', help = "create an SLP server. The default action.", action = 'store_true')
+	parser.add_argument('--job', help = 'command for server to run on each client ping.')
 	parser.add_argument('--host', default = "0.0.0.0",
-		help = "address to listen on. Minecraft does not support IPv6.")
-	parser.add_argument('--port',
-		help = "port to listen on.",
-		default = 25565, type = int)
+		help = "address to use. Minecraft does not support IPv6.")
+	parser.add_argument('--port', default = 25565, type = int)
 
 	args = parser.parse_args()
 	target = args.host, args.port
@@ -215,4 +222,4 @@ if __name__ == '__main__':
 	if args.description is not None:
 		server_info['description']['text'] = args.description
 
-	serve(target, server_info)
+	serve(target, server_info, args.job)

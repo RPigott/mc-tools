@@ -1,25 +1,17 @@
-import argparse
-import socketserver, subprocess
+import socket, socketserver, subprocess
 import struct, json, io, copy
-
-parser = argparse.ArgumentParser(
-	description = "Shell server for handling minecraft SLP requests",
-	formatter_class = argparse.ArgumentDefaultsHelpFormatter)
-
-parser.add_argument('--description', help = "server description text")
-parser.add_argument('--host', default = "0.0.0.0",
-	help = "address to listen on. Minecraft does not support IPv6.")
-parser.add_argument('--port',
-	help = "port to listen on.",
-	default = 25565, type = int)
-
-args = parser.parse_args()
+import sys, traceback
 
 class MinecraftServer(socketserver.TCPServer):
 	def __init__(self, server_info, *args, **kwds):
 		super().__init__(*args, **kwds)
 		self.server_info = server_info
 		self.job = None
+
+	def mc_pack(payload, pid = 0):
+		pid = MCVarInt(pid)
+		size = MCVarInt(len(pid) + len(payload))
+		return size.pack() + pid.pack() + payload
 
 class MCFormatError(Exception):
 	"""Minecraft protocol format error"""
@@ -83,6 +75,11 @@ class MCString:
 		return MCVarInt(len(self.data)).pack() + self.data
 
 	@staticmethod
+	def unpack(bs):
+		rfile = io.BytesIO(bs)
+		return MCString.read(rfile)
+
+	@staticmethod
 	def read(rfile):
 		size = MCVarInt.read(rfile)
 		return MCString(rfile.read(size.value))
@@ -138,7 +135,70 @@ class SLPHandler(MinecraftRequestHandler):
 		job = self.server.job
 		print(f"Request from {self.client_address[0]}. Running aux job [{job.pid}]: {' '.join(job.args)}")
 
+def serve(target, server_info):
+	with MinecraftServer(server_info, target, SLPHandler) as server:
+		server.serve_forever()
+
+def ping(target):
+	host, port = target
+	payload  = MCVarInt(477).pack()
+	payload += MCString(host).pack()
+	payload += struct.pack('>h', port)
+	payload += MCVarInt(1).pack()
+	pid = MCVarInt(0)
+	size = MCVarInt(len(payload) + len(pid))
+	packet = size.pack() + pid.pack() + payload
+	req = MCVarInt(1).pack() + MCVarInt(0).pack()
+	try:
+		with socket.socket() as sock:
+			sock.connect(target)
+			sock.sendall(packet)
+			sock.sendall(req)
+			proto = io.BytesIO(sock.recv(10))
+			size = MCVarInt.read(proto)
+			pid = MCVarInt.read(proto)
+			status = proto.read()
+			while len(status) < size.value - len(size) - len(pid):
+				status += sock.recv(2**12)
+	except ConnectionError as error:
+		traceback.print_exc()
+		sys.exit(2)
+	
+	server_info = json.loads(MCString.unpack(status).data.decode('utf-8'))
+	return server_info
+
 if __name__ == '__main__':
+	import argparse
+	parser = argparse.ArgumentParser(
+		description = "Shell server for handling minecraft SLP requests",
+		formatter_class = argparse.ArgumentDefaultsHelpFormatter)
+
+	parser.add_argument('--description', help = "server description text")
+	parser.add_argument('--ping',
+	help = """
+		ping another server instead of serving.
+		return codes indicate
+		0 if the server is empty,
+		1 if there are players online
+	""",
+		action = 'store_true')
+	parser.add_argument('--serve', help = "create an SLP server. The default action.", action = 'store_true')
+	parser.add_argument('--host', default = "0.0.0.0",
+		help = "address to listen on. Minecraft does not support IPv6.")
+	parser.add_argument('--port',
+		help = "port to listen on.",
+		default = 25565, type = int)
+
+	args = parser.parse_args()
+	target = args.host, args.port
+
+	if args.ping:
+		server_info = ping(target)
+		if server_info['players']['online']:
+			sys.exit(1)
+		else:
+			sys.exit(0)
+
 	server_info = {
 		'version': {
 			'name': 'latest',
@@ -152,9 +212,7 @@ if __name__ == '__main__':
 		}
 	}
 
-	target = args.host, args.port
 	if args.description is not None:
 		server_info['description']['text'] = args.description
 
-	with MinecraftServer(server_info, target, SLPHandler) as server:
-		server.serve_forever()
+	serve(target, server_info)

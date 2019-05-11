@@ -39,20 +39,20 @@ class MCVarInt:
 		parts = [(self.value >> (7 * k)) & 0x7f for k in range(len(self))]
 		return bytes([byte | 0x80 for byte in parts[:-1]]) + bytes(parts[-1:])
 
-	@staticmethod
-	def unpack(bs):
+	@classmethod
+	def unpack(cls, bs: bytes):
 		if not bs or bs[-1] & 0x80:
 			raise ValueError(f"Expected MCVarInt, not {bs!r}")
 
 		byte = lambda n, k: (n & 0x7f) << (7 * k)
-		return MCVarInt(sum(byte(n, k) for k, n in enumerate(bs)))
+		return cls(sum(byte(n, k) for k, n in enumerate(bs)))
 	
-	@staticmethod
-	def read(rfile):
+	@classmethod
+	def read(cls, rfile):
 		bs = rfile.read(1)
 		while bs and bs[-1] & 0x80:
 			bs += rfile.read(1)
-		return MCVarInt.unpack(bs)
+		return cls.unpack(bs)
 
 class MCString:
 	"""
@@ -76,15 +76,15 @@ class MCString:
 	def pack(self):
 		return MCVarInt(len(self.data)).pack() + self.data
 
-	@staticmethod
-	def unpack(bs):
+	@classmethod
+	def unpack(cls, bs):
 		rfile = io.BytesIO(bs)
-		return MCString.read(rfile)
+		return cls.read(rfile)
 
-	@staticmethod
-	def read(rfile):
+	@classmethod
+	def read(cls, rfile):
 		size = MCVarInt.read(rfile)
-		return MCString(rfile.read(size.value))
+		return cls(rfile.read(size.value))
 
 class MinecraftRequestHandler(socketserver.StreamRequestHandler):
 
@@ -139,8 +139,12 @@ class SLPHandler(MinecraftRequestHandler):
 		self.mc_send(status.pack())
 
 		# Client expects an echo
-		packet, pid = self.mc_recv()
-		self.mc_send(packet.read(), pid = pid)
+		try:
+			packet, pid = self.mc_recv()
+			self.mc_send(packet.read(), pid = pid)
+		except MCFormatError as error:
+			# Client did not request echo
+			return
 
 		# This was a valid conversation, start the aux job
 		if self.server.job:
@@ -171,6 +175,12 @@ def ping(target):
 			status = proto.read()
 			while len(status) < size.value - len(size) - len(pid):
 				status += sock.recv(2**12)
+
+			pong = struct.pack('>l', 0)
+			pid = MCVarInt(0)
+			size = MCVarInt(len(pid) + len(pong))
+			sock.sendall(size.pack() + pid.pack() + pong)
+			sock.recv(len(size) + size.value)
 	except ConnectionError as error:
 		traceback.print_exc()
 		sys.exit(4)

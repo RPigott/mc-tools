@@ -1,3 +1,5 @@
+#!/usr/bin/python3
+
 import socket, socketserver, subprocess
 import struct, json, io, shlex, copy
 import sys, traceback

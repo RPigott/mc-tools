@@ -171,7 +171,7 @@ def ping(target):
 				status += sock.recv(2**12)
 	except ConnectionError as error:
 		traceback.print_exc()
-		sys.exit(2)
+		sys.exit(4)
 	
 	server_info = json.loads(MCString.unpack(status).data.decode('utf-8'))
 	return server_info
@@ -189,6 +189,7 @@ if __name__ == '__main__':
 		return codes indicate
 		0 if the server is empty,
 		1 if there are players online
+		4 if there was another error
 	""",
 		action = 'store_true')
 	parser.add_argument('--job', help = 'command for server to run on each client ping.')

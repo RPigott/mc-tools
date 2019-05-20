@@ -198,10 +198,9 @@ if __name__ == '__main__':
 	parser.add_argument('--ping',
 	help = """
 		ping another server instead of serving.
-		return codes indicate
-		0 if the server is empty,
-		1 if there are players online
-		4 if there was another error
+		return codes
+		0 on success
+		4 on connection error
 	""",
 		action = 'store_true')
 	parser.add_argument('--job', help = 'command for server to run on each client ping.')
@@ -214,8 +213,16 @@ if __name__ == '__main__':
 
 	if args.ping:
 		server_info = ping(target)
-		if server_info['players']['online']:
-			sys.exit(1)
+		if args.job:
+			players = [sample['name'] for sample in server_info['players']['sample']]
+			cmd = shlex.split(args.job)
+			if '{}' not in cmd:
+				cmd.append('{}')
+			while '{}' in cmd:
+				seam = cmd.index('{}')
+				cmd = cmd[:seam] + players + cmd[seam+1:]
+			proc = subprocess.run(cmd)
+			sys.exit(proc.returncode)
 		else:
 			sys.exit(0)
 

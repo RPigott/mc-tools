@@ -303,6 +303,7 @@ def sl_ping(target):
 
 	try:
 		with socket.socket() as sock:
+			sock.settimeout(5)
 			sock.connect(target)
 			# Status
 			sock.sendall(pk_hello.pack())
@@ -311,6 +312,9 @@ def sl_ping(target):
 			# Ping
 			sock.sendall(pk_ping.pack())
 			pk_ping.recv(sock)
+	except socket.timeout as timeout:
+		print(f"{host}:{port} is offline.")
+		sys.exit(4)
 	except ConnectionError as error:
 		traceback.print_exc()
 		sys.exit(4)

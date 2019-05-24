@@ -62,7 +62,7 @@ class MCPacket:
 			if field == name:
 				return self.values[name]
 		else:
-			raise AttributeError
+			raise AttributeError(name)
 
 	def __setattr__(self, name, value):
 		for field, cls in self.fields:

@@ -247,10 +247,10 @@ class SLPHandler(MinecraftRequestHandler):
 
 	def handle(self):
 		pk_hello = MCPacket(
-			('proto'  , MCVarInt ),
-			('host'   , MCString ),
-			('port'   , MCShort  ),
-			('request', MCVarInt )
+			('proto', MCVarInt ),
+			('host' , MCString ),
+			('port' , MCShort  ),
+			('next' , MCVarInt )
 		)
 		pk_push = MCPacket()
 		pk_srv = MCPacket(('status', MCString))
@@ -283,20 +283,22 @@ def sl_ping(target):
 	host, port = target
 
 	pk_hello = MCPacket.create([
-		('proto'  , MCVarInt(477)  ),
-		('host'   , MCString(host) ),
-		('port'   , MCShort(port)  ),
-		('request', MCVarInt(1)    )
+		('proto', MCVarInt(477)  ),
+		('host' , MCString(host) ),
+		('port' , MCShort(port)  ),
+		('next' , MCVarInt(1)    )
 	])
 	pk_push = MCPacket()
 	pk_srv = MCPacket(('status', MCString))
 	pk_ping = MCPacket.create([('ping', MCLong(0))])
+	pk_ping.pid = 1
 
 	try:
 		with socket.socket() as sock:
 			sock.connect(target)
 			# Status
-			sock.sendall(pk_hello.pack() + pk_push.pack())
+			sock.sendall(pk_hello.pack())
+			sock.sendall(pk_push.pack())
 			pk_srv.recv(sock)
 			# Ping
 			sock.sendall(pk_ping.pack())

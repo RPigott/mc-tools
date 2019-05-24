@@ -4,6 +4,8 @@ import socket, socketserver, subprocess
 import struct, json, io, shlex, copy
 import sys, traceback
 
+from random import randint
+
 import argparse
 parser = argparse.ArgumentParser(
 	description = "Shell server for handling minecraft SLP requests",
@@ -283,14 +285,17 @@ def sl_ping(target):
 	host, port = target
 
 	pk_hello = MCPacket.create([
-		('proto', MCVarInt(477)  ),
+		('proto', MCVarInt(480)  ),
 		('host' , MCString(host) ),
 		('port' , MCShort(port)  ),
 		('next' , MCVarInt(1)    )
 	])
 	pk_push = MCPacket()
 	pk_srv = MCPacket(('status', MCString))
-	pk_ping = MCPacket.create([('ping', MCLong(0))])
+	pk_ping = MCPacket.create([
+		('zero' , MCLong(0)),
+		('nonce', MCLong(randint(0, 2**16)))
+	])
 	pk_ping.pid = 1
 
 	try:
@@ -315,7 +320,7 @@ if __name__ == '__main__':
 
 	if args.ping:
 		server_info = sl_ping(target)
-		print(server_info)
+		print(json.dumps(server_info))
 		sys.exit(0)
 
 	server_info = {

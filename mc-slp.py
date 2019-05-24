@@ -19,19 +19,123 @@ class MCFormatError(Exception):
 	"""Minecraft protocol format error"""
 	pass
 
-class MCVarInt:
+class MCField:
+	pass
+
+class MCPacket:
+	def __init__(self, *fields, pid = 0, values = None):
+		super().__setattr__('fields', fields)
+		self.pid = pid
+		if not values:
+			self.values = {name: None for name, cls in fields}
+		else:
+			if set(name for name, cls in self.fields) == set(values):
+				self.values = values
+			else:
+				raise MCFormatError(f"Incorrect field values: {fields} {values}")
+
+	@property
+	def size(self):
+		if None not in self.values:
+			size = len(MCVarInt(self.pid))
+			size += sum(len(cls(self.values[name])) for name, cls in self.fields)
+			return size
+		else:
+			return MCFormatError("Incomplete MCPacket")
+
+	def __len__(self):
+		size = self.size
+		return len(MCVarInt(size)) + size
+
+	def __getattr__(self, name):
+		for field, cls in self.fields:
+			if field == name:
+				return self.values[name]
+		else:
+			raise AttributeError
+
+	def __setattr__(self, name, value):
+		for field, cls in self.fields:
+			if field == name:
+				self.values[name] = value
+				return
+		else:
+			super().__setattr__(name, value)
+
+	def pack(self):
+		data = MCVarInt(self.size).pack()
+		data += MCVarInt(self.pid).pack()
+		for name, cls in self.fields:
+			data += cls(self.values[name]).pack()
+		return data
+
+	def read(self, rfile):
+		size = MCVarInt.read(rfile)
+		data = b''
+		while len(data) < size.value:
+			data += rfile.read(size.value - len(data))
+		data = io.BytesIO(data)
+		self.pid = MCVarInt.read(data).value
+
+		for name, cls in self.fields:
+			setattr(self, name, cls.read(data).value)
+
+		rem = data.read()
+		if rem:
+			raise MCFormatError(f"Unexpected data: {rem!r}.")
+
+	def recv(self, sock):
+		rfile = sock.makefile('rb')
+		return self.read(rfile)
+
+	@classmethod
+	def create(cls, values):
+		fields = [(name, type(value)) for name, value in values]
+		values = {name: value.value for name, value in values}
+		return cls(*fields, values = values)
+
+class MCStruct(MCField):
+	fmt = ''
+	def __init__(self, value = 0):
+		self.value = value
+
+	def __len__(self):
+		return struct.calcsize(self.fmt)
+
+	def pack(self):
+		return struct.pack(self.fmt, self.value)
+
+	def unpack(self, value):
+		return struct.unpack(self.fmt, value)[0]
+
+	@classmethod
+	def read(cls, rfile):
+		data = rfile.read(struct.calcsize(cls.fmt))
+		return cls(*struct.unpack(cls.fmt, data))
+
+class MCShort(MCStruct):
+	fmt = '>h'
+
+class MCLong(MCStruct):
+	fmt = '>l'
+
+class MCVarInt(MCField):
 	"""
 	VarInt type from the Minecraft protocol.
 	7 LSB are data bits. MSB of 0 indicates this byte is the last.
 	"""
 	def __init__(self, value: int):
-		self.value = value
+		self._value = value
 	
 	def __len__(self):
 		return (self.value.bit_length() - 1) // 7 + 1 if self.value else 1
 
 	def __repr__(self):
 		return f"MCVarInt({self.value})"
+
+	@property
+	def value(self):
+		return self._value
 
 	def pack(self):
 		if not self.value: return b"\x00"
@@ -54,18 +158,18 @@ class MCVarInt:
 			bs += rfile.read(1)
 		return cls.unpack(bs)
 
-class MCString:
+class MCString(MCField):
 	"""
 	String type from the Minecraft protocol.
 	string length as a VarInt followed by the data.
 	"""
-	def __init__(self, data):
-		if isinstance(data, str):
-			self.data = data.encode('utf-8')
-		elif isinstance(data, bytes):
-			self.data = data
+	def __init__(self, value):
+		if isinstance(value, str):
+			self.data = value.encode('utf-8')
+		elif isinstance(value, bytes):
+			self.data = value
 		else:
-			raise ValueError
+			raise ValueError(value)
 
 	def __len__(self):
 		return len(MCVarInt(len(self.data))) + len(self.data)
@@ -75,6 +179,14 @@ class MCString:
 	
 	def pack(self):
 		return MCVarInt(len(self.data)).pack() + self.data
+
+	@property
+	def value(self):
+		return self.data.decode('utf-8')
+
+	@value.setter
+	def value(self, new):
+		self.__init__(self, new)
 
 	@classmethod
 	def unpack(cls, bs):
@@ -154,39 +266,33 @@ def serve(target, server_info, job):
 	with MinecraftServer(server_info, job, target, SLPHandler) as server:
 		server.serve_forever()
 
-def ping(target):
+def sl_ping(target):
 	host, port = target
-	payload  = MCVarInt(477).pack()
-	payload += MCString(host).pack()
-	payload += struct.pack('>h', port)
-	payload += MCVarInt(1).pack()
-	pid = MCVarInt(0)
-	size = MCVarInt(len(payload) + len(pid))
-	packet = size.pack() + pid.pack() + payload
-	req = MCVarInt(1).pack() + MCVarInt(0).pack()
+
+	pk_hello = MCPacket.create([
+		('proto'  , MCVarInt(477)  ),
+		('host'   , MCString(host) ),
+		('port'   , MCShort(port)  ),
+		('request', MCVarInt(1)    )
+	])
+	pk_push = MCPacket()
+	pk_srv = MCPacket(('status', MCString))
+	pk_ping = MCPacket.create([('ping', MCLong(0))])
+
 	try:
 		with socket.socket() as sock:
 			sock.connect(target)
-			sock.sendall(packet)
-			sock.sendall(req)
-			proto = io.BytesIO(sock.recv(10))
-			size = MCVarInt.read(proto)
-			pid = MCVarInt.read(proto)
-			status = proto.read()
-			while len(status) < size.value - len(size) - len(pid):
-				status += sock.recv(2**12)
-
-			pong = struct.pack('>l', 0)
-			pid = MCVarInt(0)
-			size = MCVarInt(len(pid) + len(pong))
-			sock.sendall(size.pack() + pid.pack() + pong)
-			sock.recv(len(size) + size.value)
+			# Status
+			sock.sendall(pk_hello.pack() + pk_push.pack())
+			pk_srv.recv(sock)
+			# Ping
+			sock.sendall(pk_ping.pack())
+			pk_ping.recv(sock)
 	except ConnectionError as error:
 		traceback.print_exc()
 		sys.exit(4)
-	
-	server_info = json.loads(MCString.unpack(status).data.decode('utf-8'))
-	return server_info
+
+	return json.loads(pk_srv.status)
 
 if __name__ == '__main__':
 	import argparse
@@ -212,7 +318,7 @@ if __name__ == '__main__':
 	target = args.host, args.port
 
 	if args.ping:
-		server_info = ping(target)
+		server_info = sl_ping(target)
 		if args.job:
 			players = [sample['name'] for sample in server_info['players']['sample']]
 			cmd = shlex.split(args.job)
@@ -232,7 +338,8 @@ if __name__ == '__main__':
 		},
 		'players': {
 			'max': 0,
-			'online': 0
+			'online': 0,
+			'sample': []
 		},
 		'description': {
 			'text': 'SLP idle server'

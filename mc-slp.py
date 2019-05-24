@@ -256,7 +256,10 @@ class SLPHandler(MinecraftRequestHandler):
 		)
 		pk_push = MCPacket()
 		pk_srv = MCPacket(('status', MCString))
-		pk_ping = MCPacket(('ping', MCLong))
+		pk_ping = MCPacket(
+			('zero' , MCLong),
+			('nonce', MCLong)
+		)
 
 		self.mc_recv(pk_hello)
 		self.mc_recv(pk_push)

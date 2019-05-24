@@ -333,7 +333,6 @@ if __name__ == '__main__':
 		'players': {
 			'max': 0,
 			'online': 0,
-			'sample': []
 		},
 		'description': {
 			'text': 'SLP idle server'

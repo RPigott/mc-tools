@@ -4,16 +4,24 @@ import socket, socketserver, subprocess
 import struct, json, io, shlex, copy
 import sys, traceback
 
-class MinecraftServer(socketserver.TCPServer):
-	def __init__(self, server_info, job = None, *args, **kwds):
-		super().__init__(*args, **kwds)
-		self.server_info = server_info
-		self.job = job
+import argparse
+parser = argparse.ArgumentParser(
+	description = "Shell server for handling minecraft SLP requests",
+	formatter_class = argparse.ArgumentDefaultsHelpFormatter)
 
-	def mc_pack(payload, pid = 0):
-		pid = MCVarInt(pid)
-		size = MCVarInt(len(pid) + len(payload))
-		return size.pack() + pid.pack() + payload
+parser.add_argument('--description', help = "server description text")
+parser.add_argument('--ping',
+help = """
+	ping another server instead of serving.
+	return codes
+	0 on success
+	4 on connection error
+""",
+	action = 'store_true')
+parser.add_argument('--job', help = 'command for server to run on each client ping.')
+parser.add_argument('--host', default = "0.0.0.0",
+	help = "address to use. Minecraft does not support IPv6.")
+parser.add_argument('--port', default = 25565, type = int)
 
 class MCFormatError(Exception):
 	"""Minecraft protocol format error"""
@@ -62,6 +70,13 @@ class MCPacket:
 		else:
 			super().__setattr__(name, value)
 
+	def __repr__(self):
+		pairs = []
+		for name, cls in self.fields:
+			pairs.append(f"{name}={cls(self.values[name])!r}")
+
+		return "MCPacket<" + ', '.join(pairs) + ">"
+
 	def pack(self):
 		data = MCVarInt(self.size).pack()
 		data += MCVarInt(self.pid).pack()
@@ -101,6 +116,9 @@ class MCStruct(MCField):
 
 	def __len__(self):
 		return struct.calcsize(self.fmt)
+
+	def __repr__(self):
+		return f"{type(self).__name__}({self.value})"
 
 	def pack(self):
 		return struct.pack(self.fmt, self.value)
@@ -198,28 +216,22 @@ class MCString(MCField):
 		size = MCVarInt.read(rfile)
 		return cls(rfile.read(size.value))
 
+class MinecraftServer(socketserver.TCPServer):
+	def __init__(self, server_info, job = None, *args, **kwds):
+		super().__init__(*args, **kwds)
+		self.server_info = server_info
+		self.job = job
+
 class MinecraftRequestHandler(socketserver.StreamRequestHandler):
+	def mc_send(self, pkt: MCPacket):
+		"""Send one MCPacket"""
+		self.wfile.write(pkt.pack())
 
-	def mc_recv(self):
-		"""Return one minecraft protocol packet"""
-		try:
-			size = MCVarInt.read(self.rfile)
-			pid = MCVarInt.read(self.rfile)
-			data = self.rfile.read(size.value - len(pid))
-			buf = io.BytesIO(data)
-			return buf, pid.value
-		except ValueError as error:
-			raise MCFormatError from error
-
-	def mc_send(self, payload, pid = 0):
-		"""Send one minecraft protocol packet"""
-		pid = MCVarInt(pid)
-		size = MCVarInt(len(payload) + len(pid))
-		data = size.pack() + pid.pack() + payload
-		self.wfile.write(data)
+	def mc_recv(self, pkt: MCPacket):
+		"""Fill one MCPacket with stream data"""
+		pkt.read(self.rfile)
 
 class SLPHandler(MinecraftRequestHandler):
-
 	def do_run(self):
 		print(f"Request from {self.client_address[0]}.")
 		if hasattr(self.server, 'run'):
@@ -234,35 +246,36 @@ class SLPHandler(MinecraftRequestHandler):
 			print(f"Running aux job [{proc.pid}]: {' '.join(proc.args)}")
 
 	def handle(self):
-		# Read protocol things
-		packet, pid = self.mc_recv() # Hello
-		req, _ = self.mc_recv() # empty request
+		pk_hello = MCPacket(
+			('proto'  , MCVarInt ),
+			('host'   , MCString ),
+			('port'   , MCShort  ),
+			('request', MCVarInt )
+		)
+		pk_push = MCPacket()
+		pk_srv = MCPacket(('status', MCString))
+		pk_ping = MCPacket(('ping', MCLong))
 
-		# Read the client hello
+		self.mc_recv(pk_hello)
+		self.mc_recv(pk_push)
+
 		server_info = copy.deepcopy(self.server.server_info)
-		protocol = MCVarInt.read(packet)
-		server_info['version']['protocol'] = protocol.value
-		addr = MCString.read(packet)
-		port, = struct.unpack('>h', packet.read(2))
-		state = MCVarInt.read(packet)
+		server_info['version']['protocol'] = pk_hello.proto
+		pk_srv.status = json.dumps(server_info)
+		self.mc_send(pk_srv)
 
-		# Always return our status, don't care about other requests
-		status = MCString(json.dumps(server_info))
-		self.mc_send(status.pack())
-
-		# Client expects an echo
 		try:
-			packet, pid = self.mc_recv()
-			self.mc_send(packet.read(), pid = pid)
+			self.mc_recv(pk_ping)
+			self.mc_send(pk_ping)
 		except MCFormatError as error:
-			# Client did not request echo
+			# Client did not request an echo
 			return
 
 		# This was a valid conversation, start the aux job
 		if self.server.job:
 			self.do_run()
 
-def serve(target, server_info, job):
+def sl_serve(target, server_info, job):
 	with MinecraftServer(server_info, job, target, SLPHandler) as server:
 		server.serve_forever()
 
@@ -295,42 +308,13 @@ def sl_ping(target):
 	return json.loads(pk_srv.status)
 
 if __name__ == '__main__':
-	import argparse
-	parser = argparse.ArgumentParser(
-		description = "Shell server for handling minecraft SLP requests",
-		formatter_class = argparse.ArgumentDefaultsHelpFormatter)
-
-	parser.add_argument('--description', help = "server description text")
-	parser.add_argument('--ping',
-	help = """
-		ping another server instead of serving.
-		return codes
-		0 on success
-		4 on connection error
-	""",
-		action = 'store_true')
-	parser.add_argument('--job', help = 'command for server to run on each client ping.')
-	parser.add_argument('--host', default = "0.0.0.0",
-		help = "address to use. Minecraft does not support IPv6.")
-	parser.add_argument('--port', default = 25565, type = int)
-
 	args = parser.parse_args()
 	target = args.host, args.port
 
 	if args.ping:
 		server_info = sl_ping(target)
-		if args.job:
-			players = [sample['name'] for sample in server_info['players']['sample']]
-			cmd = shlex.split(args.job)
-			if '{}' not in cmd:
-				cmd.append('{}')
-			while '{}' in cmd:
-				seam = cmd.index('{}')
-				cmd = cmd[:seam] + players + cmd[seam+1:]
-			proc = subprocess.run(cmd)
-			sys.exit(proc.returncode)
-		else:
-			sys.exit(0)
+		print(server_info)
+		sys.exit(0)
 
 	server_info = {
 		'version': {
@@ -349,4 +333,4 @@ if __name__ == '__main__':
 	if args.description is not None:
 		server_info['description']['text'] = args.description
 
-	serve(target, server_info, args.job)
+	sl_serve(target, server_info, args.job)

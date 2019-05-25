@@ -346,4 +346,7 @@ if __name__ == '__main__':
 	if args.description is not None:
 		server_info['description']['text'] = args.description
 
-	sl_serve(target, server_info, args.job)
+	try:
+		sl_serve(target, server_info, args.job)
+	except KeyboardInterrupt as intr:
+		pass

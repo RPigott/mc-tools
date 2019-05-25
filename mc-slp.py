@@ -86,11 +86,11 @@ class MCPacket:
 			data += cls(self.values[name]).pack()
 		return data
 
-	def read(self, rfile):
-		size = MCVarInt.read(rfile)
-		data = b''
+	def recv(self, sock):
+		size = MCVarInt.recv(sock)
+		data = sock.recv(size.value)
 		while len(data) < size.value:
-			data += rfile.read(size.value - len(data))
+			data += sock.recv(size.value - len(data))
 		data = io.BytesIO(data)
 		self.pid = MCVarInt.read(data).value
 
@@ -100,10 +100,6 @@ class MCPacket:
 		rem = data.read()
 		if rem:
 			raise MCFormatError(f"Unexpected data: {rem!r}.")
-
-	def recv(self, sock):
-		rfile = sock.makefile('rb')
-		return self.read(rfile)
 
 	@classmethod
 	def create(cls, values):
@@ -178,6 +174,13 @@ class MCVarInt(MCField):
 			bs += rfile.read(1)
 		return cls.unpack(bs)
 
+	@classmethod
+	def recv(cls, sock):
+		bs = sock.recv(1)
+		while bs and bs[-1] & 0x80:
+			bs += sock.recv(1)
+		return cls.unpack(bs)
+
 class MCString(MCField):
 	"""
 	String type from the Minecraft protocol.
@@ -219,19 +222,21 @@ class MCString(MCField):
 		return cls(rfile.read(size.value))
 
 class MinecraftServer(socketserver.TCPServer):
-	def __init__(self, server_info, job = None, *args, **kwds):
+	allow_reuse_address = True
+
+	def __init__(self, *args, status = {}, job = None, **kwds):
 		super().__init__(*args, **kwds)
-		self.server_info = server_info
+		self.status = status
 		self.job = job
 
-class MinecraftRequestHandler(socketserver.StreamRequestHandler):
+class MinecraftRequestHandler(socketserver.BaseRequestHandler):
 	def mc_send(self, pkt: MCPacket):
 		"""Send one MCPacket"""
-		self.wfile.write(pkt.pack())
+		self.request.sendall(pkt.pack())
 
 	def mc_recv(self, pkt: MCPacket):
 		"""Fill one MCPacket with stream data"""
-		pkt.read(self.rfile)
+		pkt.recv(self.request)
 
 class SLPHandler(MinecraftRequestHandler):
 	def do_run(self):
@@ -247,6 +252,9 @@ class SLPHandler(MinecraftRequestHandler):
 			self.server.run = proc
 			print(f"Running aux job [{proc.pid}]: {' '.join(proc.args)}")
 
+	def setup(self):
+		self.request.settimeout(1)
+
 	def handle(self):
 		pk_hello = MCPacket(
 			('proto', MCVarInt ),
@@ -261,27 +269,33 @@ class SLPHandler(MinecraftRequestHandler):
 			('nonce', MCLong)
 		)
 
-		self.mc_recv(pk_hello)
-		self.mc_recv(pk_push)
+		try:
+			self.mc_recv(pk_hello)
+			self.mc_recv(pk_push)
 
-		server_info = copy.deepcopy(self.server.server_info)
-		server_info['version']['protocol'] = pk_hello.proto
-		pk_srv.status = json.dumps(server_info)
-		self.mc_send(pk_srv)
+			status = copy.deepcopy(self.server.status)
+			status['version']['protocol'] = pk_hello.proto
+			pk_srv.status = json.dumps(status)
+			self.mc_send(pk_srv)
+		except (MCFormatError, socket.timeout) as error:
+			print(f"Bad request from {self.client_address}", file = sys.stderr)
+			traceback.print_exc()
+			return
 
+		# Client may send optional echo
 		try:
 			self.mc_recv(pk_ping)
 			self.mc_send(pk_ping)
-		except MCFormatError as error:
+		except (MCFormatError, socket.timeout) as error:
 			# Client did not request an echo
-			return
+			pass
 
 		# This was a valid conversation, start the aux job
 		if self.server.job:
 			self.do_run()
 
-def sl_serve(target, server_info, job):
-	with MinecraftServer(server_info, job, target, SLPHandler) as server:
+def sl_serve(target, status, job):
+	with MinecraftServer(target, SLPHandler, status = status, job = job) as server:
 		server.serve_forever()
 
 def sl_ping(target):
@@ -313,7 +327,7 @@ def sl_ping(target):
 			sock.sendall(pk_ping.pack())
 			pk_ping.recv(sock)
 	except socket.timeout as timeout:
-		print(f"{host}:{port} is offline.")
+		print(f"{host}:{port} is offline.", file = sys.stderr)
 		sys.exit(4)
 	except ConnectionError as error:
 		traceback.print_exc()
@@ -326,11 +340,11 @@ if __name__ == '__main__':
 	target = args.host, args.port
 
 	if args.ping:
-		server_info = sl_ping(target)
-		print(json.dumps(server_info))
+		status = sl_ping(target)
+		print(json.dumps(status))
 		sys.exit(0)
 
-	server_info = {
+	status = {
 		'version': {
 			'name': 'latest',
 		},
@@ -344,9 +358,9 @@ if __name__ == '__main__':
 	}
 
 	if args.description is not None:
-		server_info['description']['text'] = args.description
+		status['description']['text'] = args.description
 
 	try:
-		sl_serve(target, server_info, args.job)
+		sl_serve(target, status, args.job)
 	except KeyboardInterrupt as intr:
 		pass

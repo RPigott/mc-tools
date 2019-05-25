@@ -73,10 +73,7 @@ class MCPacket:
 			super().__setattr__(name, value)
 
 	def __repr__(self):
-		pairs = []
-		for name, cls in self.fields:
-			pairs.append(f"{name}={cls(self.values[name])!r}")
-
+		pairs = [f"{name}={cls(self.values[name])!r}" for name, cls in self.fields]
 		return "MCPacket<" + ', '.join(pairs) + ">"
 
 	def pack(self):

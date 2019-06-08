@@ -326,8 +326,11 @@ def sl_ping(target):
 	except socket.timeout as timeout:
 		print(f"{host}:{port} is offline.", file = sys.stderr)
 		sys.exit(4)
+	except socket.gaierror as error:
+		print(f"Cannot resolve {host}.", file = sys.stderr)
+		sys.exit(4)
 	except ConnectionError as error:
-		traceback.print_exc()
+		print("Connection error.", file = sys.stderr)
 		sys.exit(4)
 
 	return json.loads(pk_srv.status)

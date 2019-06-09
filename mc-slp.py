@@ -21,9 +21,8 @@ help = """
 """,
 	action = 'store_true')
 parser.add_argument('--job', help = 'command for server to run on each client ping.')
-parser.add_argument('--host', default = "0.0.0.0",
-	help = "address to use. Minecraft does not support IPv6.")
-parser.add_argument('--port', default = 25565, type = int)
+parser.add_argument('host', default = "0.0.0.0:25565",
+help = "address to use 'host:port' format. Minecraft does not support IPv6.")
 
 class MCFormatError(Exception):
 	"""Minecraft protocol format error"""
@@ -336,8 +335,16 @@ def sl_ping(target):
 	return json.loads(pk_srv.status)
 
 if __name__ == '__main__':
-	args = parser.parse_args()
-	target = args.host, args.port
+	try:
+		args = parser.parse_args()
+		if ':' in args.host:
+			host, port = args.host.split(':')
+			target = host, int(port)
+		else:
+			target = args.host, 25565
+	except ValueError as error:
+		print(f"Invalid host: {args.host}", file = sys.stderr)
+		sys.exit(1)
 
 	if args.ping:
 		status = sl_ping(target)

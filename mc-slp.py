@@ -93,7 +93,7 @@ class MCPacket:
 		for name, cls in self.fields:
 			setattr(self, name, cls.read(data).value)
 
-		rem = data.read()
+		rem = data.read(80)
 		if rem:
 			raise MCFormatError(f"Unexpected data: {rem!r}.")
 
@@ -311,26 +311,28 @@ def sl_ping(target):
 	])
 	pk_ping.pid = 1
 
-	try:
-		with socket.socket() as sock:
-			sock.settimeout(5)
+	with socket.socket() as sock:
+		sock.settimeout(3)
+		try:
 			sock.connect(target)
-			# Status
 			sock.sendall(pk_hello.pack())
 			sock.sendall(pk_push.pack())
 			pk_srv.recv(sock)
-			# Ping
+		except socket.timeout as timeout:
+			print(f"{host}:{port} is offline.", file = sys.stderr)
+			sys.exit(4)
+		except socket.gaierror as error:
+			print(f"Cannot resolve {host}.", file = sys.stderr)
+			sys.exit(4)
+		except ConnectionError as error:
+			print("Connection error.", file = sys.stderr)
+			sys.exit(4)
+		try:
 			sock.sendall(pk_ping.pack())
 			pk_ping.recv(sock)
-	except socket.timeout as timeout:
-		print(f"{host}:{port} is offline.", file = sys.stderr)
-		sys.exit(4)
-	except socket.gaierror as error:
-		print(f"Cannot resolve {host}.", file = sys.stderr)
-		sys.exit(4)
-	except ConnectionError as error:
-		print("Connection error.", file = sys.stderr)
-		sys.exit(4)
+		except (ConnectionError, MCFormatError) as error:
+			# Server doesn't support echo
+			pass
 
 	return json.loads(pk_srv.status)
 

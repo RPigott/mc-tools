@@ -21,7 +21,7 @@ help = """
 """,
 	action = 'store_true')
 parser.add_argument('--job', help = 'command for server to run on each client ping.')
-parser.add_argument('host', default = "0.0.0.0:25565",
+parser.add_argument('host', nargs = '?', default = "0.0.0.0:25565",
 help = "address to use 'host:port' format. Minecraft does not support IPv6.")
 
 class MCFormatError(Exception):

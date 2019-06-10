@@ -278,6 +278,10 @@ class SLPHandler(MinecraftRequestHandler):
 			traceback.print_exc()
 			return
 
+		# This was a valid conversation, start the aux job
+		if self.server.job:
+			self.do_run()
+
 		# Client may send optional echo
 		try:
 			self.mc_recv(pk_ping)
@@ -285,10 +289,6 @@ class SLPHandler(MinecraftRequestHandler):
 		except (MCFormatError, socket.timeout) as error:
 			# Client did not request an echo
 			pass
-
-		# This was a valid conversation, start the aux job
-		if self.server.job:
-			self.do_run()
 
 def sl_serve(target, status, job):
 	with MinecraftServer(target, SLPHandler, status = status, job = job) as server:
@@ -330,7 +330,7 @@ def sl_ping(target):
 		try:
 			sock.sendall(pk_ping.pack())
 			pk_ping.recv(sock)
-		except (ConnectionError, MCFormatError) as error:
+		except (MCFormatError, socket.error) as error:
 			# Server doesn't support echo
 			pass
 

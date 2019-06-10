@@ -324,8 +324,8 @@ def sl_ping(target):
 		except socket.gaierror as error:
 			print(f"Cannot resolve {host}.", file = sys.stderr)
 			sys.exit(4)
-		except ConnectionError as error:
-			print("Connection error.", file = sys.stderr)
+		except socket.error as error:
+			print(error, file = sys.stderr)
 			sys.exit(4)
 		try:
 			sock.sendall(pk_ping.pack())

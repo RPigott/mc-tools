@@ -340,7 +340,7 @@ if __name__ == '__main__':
 	try:
 		args = parser.parse_args()
 		if ':' in args.host:
-			host, port = args.host.split(':')
+			host, port = args.host.rsplit(':', 1)
 			target = host, int(port)
 		else:
 			target = args.host, 25565

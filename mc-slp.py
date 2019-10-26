@@ -275,8 +275,7 @@ class SLPHandler(MinecraftRequestHandler):
 			self.mc_send(pk_srv)
 		except (MCFormatError, socket.timeout) as error:
 			print(f"Bad request from {self.client_address}", file = sys.stderr)
-			traceback.print_exc()
-			return
+			raise
 
 		# This was a valid conversation, start the aux job
 		if self.server.job:
